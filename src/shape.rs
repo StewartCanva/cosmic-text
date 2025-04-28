@@ -10,6 +10,7 @@ use core::mem;
 use core::ops::Range;
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
+use std::collections::HashMap;
 
 use crate::fallback::FontFallbackIter;
 use crate::{
@@ -104,7 +105,8 @@ impl fmt::Debug for ShapeBuffer {
     }
 }
 
-fn shape_fallback(
+/// Shape text with a specific font, returning missing character positions
+pub fn shape_fallback(
     scratch: &mut ShapeBuffer,
     glyphs: &mut Vec<ShapeGlyph>,
     font: &Font,
@@ -282,6 +284,13 @@ fn shape_run(
         )
     };
 
+    // NEW: Process Unicode range fallbacks if there are missing glyphs
+    if !missing.is_empty() {
+        missing = process_unicode_range_fallbacks(
+            glyphs, font_system, line, attrs_list, start_run, end_run, span_rtl, &missing
+        );
+    }
+
     //TODO: improve performance!
     while !missing.is_empty() {
         let font = match font_iter.next() {
@@ -321,7 +330,6 @@ fn shape_run(
             let mut missing_i = 0;
             while missing_i < missing.len() {
                 if missing[missing_i] >= start && missing[missing_i] < end {
-                    // println!("No longer missing {}", missing[missing_i]);
                     missing.remove(missing_i);
                 } else {
                     missing_i += 1;
@@ -416,6 +424,8 @@ fn shape_run_cached(
 
     // Fill in cache if not already set
     let mut cache_glyphs = Vec::new();
+    
+    // Use our modified shape_run function (with Unicode range fallbacks)
     shape_run(
         &mut cache_glyphs,
         font_system,
@@ -425,6 +435,7 @@ fn shape_run_cached(
         end_run,
         span_rtl,
     );
+    
     glyphs.extend_from_slice(&cache_glyphs);
     for glyph in cache_glyphs.iter_mut() {
         // Adjust glyph start and end to remove run position
@@ -489,6 +500,125 @@ fn shape_skip(
                 }
             }),
     );
+}
+
+/// Process Unicode range fallbacks for missing character positions
+pub fn process_unicode_range_fallbacks(
+    glyphs: &mut Vec<ShapeGlyph>,
+    font_system: &mut FontSystem,
+    line: &str,
+    attrs_list: &AttrsList,
+    start_run: usize,
+    end_run: usize,
+    span_rtl: bool,
+    missing: &[usize],
+) -> Vec<usize> {
+    // If no Unicode range fallbacks are defined, return quickly
+    if !font_system.has_unicode_range_fallbacks() || missing.is_empty() {
+        return missing.to_vec();
+    }
+    
+    // Get attributes for matching fonts
+    let attrs = attrs_list.get_span(start_run);
+    let fonts = font_system.get_font_matches(&attrs);
+    
+    // Group missing positions by fallback font family
+    let mut font_family_to_positions: HashMap<String, Vec<usize>> = HashMap::default();
+    let mut positions_without_fallback: Vec<usize> = Vec::new();
+    
+    for &pos in missing {
+        // Find the character at this position
+        let char_offset = pos.saturating_sub(start_run);
+        if char_offset >= line[start_run..end_run].len() {
+            positions_without_fallback.push(pos);
+            continue;
+        }
+        
+        let c = match line[start_run..end_run][char_offset..].chars().next() {
+            Some(c) => c,
+            None => {
+                positions_without_fallback.push(pos);
+                continue;
+            }
+        };
+        
+        if let Some(family) = font_system.get_unicode_range_fallback_for_char(c) {
+            font_family_to_positions.entry(family).or_default().push(pos);
+        } else {
+            positions_without_fallback.push(pos);
+        }
+    }
+    
+    // Process each fallback font family and its positions
+    let mut remaining_missing = positions_without_fallback;
+    
+    for (family, positions) in font_family_to_positions {
+        // Find a font for this family
+        let mut found_font = false;
+        
+        for m_key in &*fonts {
+            // Check if this font face belongs to the family
+            if let Some(face) = font_system.db().face(m_key.id) {
+                if face.families.iter().any(|(name, _)| *name == family) {
+                    if let Some(range_font) = font_system.get_font(m_key.id) {
+                        // Shape the entire run with this font
+                        let mut fb_glyphs = Vec::new();
+                        
+                        // Use a temporary buffer to shape with the fallback font
+                        let mut buffer = ShapeBuffer::default();
+                        let fb_missing = shape_fallback(
+                            &mut buffer,
+                            &mut fb_glyphs,
+                            &range_font,
+                            line,
+                            attrs_list,
+                            start_run,
+                            end_run,
+                            span_rtl,
+                        );
+                        
+                        // Process positions that should be covered by this font
+                        for &pos in &positions {
+                            if !fb_missing.contains(&pos) {
+                                // Find the corresponding glyph in fb_glyphs
+                                for fb_glyph in &fb_glyphs {
+                                    if fb_glyph.start == pos {
+                                        // Add or replace the glyph in our results
+                                        let mut found = false;
+                                        for glyph in glyphs.iter_mut() {
+                                            if glyph.start == pos {
+                                                *glyph = fb_glyph.clone();
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                        if !found {
+                                            glyphs.push(fb_glyph.clone());
+                                        }
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // This position wasn't covered by the font after all
+                                remaining_missing.push(pos);
+                            }
+                        }
+                        
+                        found_font = true;
+                        break; // We found a font for this family
+                    }
+                }
+            }
+        }
+        
+        // If we didn't find a font for this family, add all positions back to missing
+        if !found_font {
+            remaining_missing.extend_from_slice(&positions);
+        }
+    }
+    
+    remaining_missing.sort(); // Sort for consistency
+    remaining_missing
 }
 
 /// A shaped glyph
