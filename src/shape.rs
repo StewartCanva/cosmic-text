@@ -262,121 +262,131 @@ fn shape_run(
     log::trace!("      Run {:?}: '{}'", &scripts, &line[start_run..end_run],);
 
     let attrs = attrs_list.get_span(start_run);
-
     let fonts = font_system.get_font_matches(&attrs);
-
     let default_families = [&attrs.family];
-    let mut font_iter = FontFallbackIter::new(
-        font_system,
-        &fonts,
-        &default_families,
-        &scripts,
-        &line[start_run..end_run],
-    );
 
-    let font = font_iter.next().expect("no default font found");
+    // Step 1: Process with the default font
+    let (glyph_start, mut missing) = {
+        let mut font_iter = FontFallbackIter::new(
+            font_system,
+            &fonts,
+            &default_families,
+            &scripts,
+            &line[start_run..end_run],
+        );
 
-    let glyph_start = glyphs.len();
-    let mut missing = {
+        let font = font_iter.next().expect("no default font found");
+        let glyph_start = glyphs.len();
+        
         let scratch = font_iter.shape_caches();
-        shape_fallback(
+        let missing = shape_fallback(
             scratch, glyphs, &font, line, attrs_list, start_run, end_run, span_rtl,
-        )
-    };
+        );
+        
+        (glyph_start, missing)
+    }; // font_iter goes out of scope here, releasing the borrow
 
-    // NEW: Process Unicode range fallbacks if there are missing glyphs
+    // Step 2: Apply Unicode range fallbacks if needed
     if !missing.is_empty() {
-        missing = process_unicode_range_fallbacks(
-            glyphs, font_system, line, attrs_list, start_run, end_run, span_rtl, &missing
+        missing = font_system.process_unicode_range_fallbacks(
+            glyphs, line, attrs_list, start_run, end_run, span_rtl, &missing
         );
     }
 
-    //TODO: improve performance!
-    while !missing.is_empty() {
-        let font = match font_iter.next() {
-            Some(some) => some,
-            None => break,
-        };
-
-        log::trace!(
-            "Evaluating fallback with font '{}'",
-            font_iter.face_name(font.id())
-        );
-        let mut fb_glyphs = Vec::new();
-        let scratch = font_iter.shape_caches();
-        let fb_missing = shape_fallback(
-            scratch,
-            &mut fb_glyphs,
-            &font,
-            line,
-            attrs_list,
-            start_run,
-            end_run,
-            span_rtl,
+    // Step 3: Continue with standard fallbacks if there are still missing glyphs
+    if !missing.is_empty() {
+        let mut font_iter = FontFallbackIter::new(
+            font_system,
+            &fonts,
+            &default_families,
+            &scripts,
+            &line[start_run..end_run],
         );
 
-        // Insert all matching glyphs
-        let mut fb_i = 0;
-        while fb_i < fb_glyphs.len() {
-            let start = fb_glyphs[fb_i].start;
-            let end = fb_glyphs[fb_i].end;
+        // Skip the first font as we've already processed it
+        let _ = font_iter.next();
 
-            // Skip clusters that are not missing, or where the fallback font is missing
-            if !missing.contains(&start) || fb_missing.contains(&start) {
-                fb_i += 1;
-                continue;
-            }
+        while !missing.is_empty() {
+            let font = match font_iter.next() {
+                Some(some) => some,
+                None => break,
+            };
 
-            let mut missing_i = 0;
-            while missing_i < missing.len() {
-                if missing[missing_i] >= start && missing[missing_i] < end {
-                    missing.remove(missing_i);
-                } else {
-                    missing_i += 1;
-                }
-            }
+            log::trace!(
+                "Evaluating fallback with font '{}'",
+                font_iter.face_name(font.id())
+            );
+            
+            let mut fb_glyphs = Vec::new();
+            let scratch = font_iter.shape_caches();
+            let fb_missing = shape_fallback(
+                scratch,
+                &mut fb_glyphs,
+                &font,
+                line,
+                attrs_list,
+                start_run,
+                end_run,
+                span_rtl,
+            );
 
-            // Find prior glyphs
-            let mut i = glyph_start;
-            while i < glyphs.len() {
-                if glyphs[i].start >= start && glyphs[i].end <= end {
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
-
-            // Remove prior glyphs
-            while i < glyphs.len() {
-                if glyphs[i].start >= start && glyphs[i].end <= end {
-                    let _glyph = glyphs.remove(i);
-                    // log::trace!("Removed {},{} from {}", _glyph.start, _glyph.end, i);
-                } else {
-                    break;
-                }
-            }
-
+            // Insert all matching glyphs
+            let mut fb_i = 0;
             while fb_i < fb_glyphs.len() {
-                if fb_glyphs[fb_i].start >= start && fb_glyphs[fb_i].end <= end {
-                    let fb_glyph = fb_glyphs.remove(fb_i);
-                    // log::trace!("Insert {},{} from font {} at {}", fb_glyph.start, fb_glyph.end, font_i, i);
-                    glyphs.insert(i, fb_glyph);
-                    i += 1;
-                } else {
-                    break;
+                let start = fb_glyphs[fb_i].start;
+                let end = fb_glyphs[fb_i].end;
+
+                // Skip clusters that are not missing, or where the fallback font is missing
+                if !missing.contains(&start) || fb_missing.contains(&start) {
+                    fb_i += 1;
+                    continue;
+                }
+
+                let mut missing_i = 0;
+                while missing_i < missing.len() {
+                    if missing[missing_i] >= start && missing[missing_i] < end {
+                        missing.remove(missing_i);
+                    } else {
+                        missing_i += 1;
+                    }
+                }
+
+                // Find prior glyphs
+                let mut i = glyph_start;
+                while i < glyphs.len() {
+                    if glyphs[i].start >= start && glyphs[i].end <= end {
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+
+                // Remove prior glyphs
+                while i < glyphs.len() {
+                    if glyphs[i].start >= start && glyphs[i].end <= end {
+                        let _glyph = glyphs.remove(i);
+                        // log::trace!("Removed {},{} from {}", _glyph.start, _glyph.end, i);
+                    } else {
+                        break;
+                    }
+                }
+
+                while fb_i < fb_glyphs.len() {
+                    if fb_glyphs[fb_i].start >= start && fb_glyphs[fb_i].end <= end {
+                        let fb_glyph = fb_glyphs.remove(fb_i);
+                        // log::trace!("Insert {},{} from font {} at {}", fb_glyph.start, fb_glyph.end, font_i, i);
+                        glyphs.insert(i, fb_glyph);
+                        i += 1;
+                    } else {
+                        break;
+                    }
                 }
             }
         }
-    }
 
-    // Debug missing font fallbacks
-    font_iter.check_missing(&line[start_run..end_run]);
-
-    /*
-    for glyph in glyphs.iter() {
-        log::trace!("'{}': {}, {}, {}, {}", &line[glyph.start..glyph.end], glyph.x_advance, glyph.y_advance, glyph.x_offset, glyph.y_offset);
+        // Debug missing font fallbacks
+        font_iter.check_missing(&line[start_run..end_run]);
     }
-    */
 
     // Restore the scripts buffer.
     font_system.shape_buffer.scripts = scripts;
@@ -520,10 +530,9 @@ pub fn process_unicode_range_fallbacks(
     
     // Get attributes for matching fonts
     let attrs = attrs_list.get_span(start_run);
-    let fonts = font_system.get_font_matches(&attrs);
     
-    // Group missing positions by fallback font family
-    let mut font_family_to_positions: HashMap<String, Vec<usize>> = HashMap::default();
+    // Group missing positions by fallback font ID
+    let mut font_id_to_positions: HashMap<fontdb::ID, Vec<usize>> = HashMap::default();
     let mut positions_without_fallback: Vec<usize> = Vec::new();
     
     for &pos in missing {
@@ -542,82 +551,69 @@ pub fn process_unicode_range_fallbacks(
             }
         };
         
-        if let Some(family) = font_system.get_unicode_range_fallback_for_char(c) {
-            font_family_to_positions.entry(family).or_default().push(pos);
+        if let Some(font_id) = font_system.get_unicode_range_fallback_for_char(c) {
+            font_id_to_positions.entry(font_id).or_default().push(pos);
         } else {
             positions_without_fallback.push(pos);
         }
     }
     
-    // Process each fallback font family and its positions
+    // Process each fallback font ID and its positions
     let mut remaining_missing = positions_without_fallback;
     
-    for (family, positions) in font_family_to_positions {
-        // Find a font for this family
-        let mut found_font = false;
-        
-        for m_key in &*fonts {
-            // Check if this font face belongs to the family
-            if let Some(face) = font_system.db().face(m_key.id) {
-                if face.families.iter().any(|(name, _)| *name == family) {
-                    if let Some(range_font) = font_system.get_font(m_key.id) {
-                        // Shape the entire run with this font
-                        let mut fb_glyphs = Vec::new();
-                        
-                        // Use a temporary buffer to shape with the fallback font
-                        let mut buffer = ShapeBuffer::default();
-                        let fb_missing = shape_fallback(
-                            &mut buffer,
-                            &mut fb_glyphs,
-                            &range_font,
-                            line,
-                            attrs_list,
-                            start_run,
-                            end_run,
-                            span_rtl,
-                        );
-                        
-                        // Process positions that should be covered by this font
-                        for &pos in &positions {
-                            if !fb_missing.contains(&pos) {
-                                // Find the corresponding glyph in fb_glyphs
-                                for fb_glyph in &fb_glyphs {
-                                    if fb_glyph.start == pos {
-                                        // Add or replace the glyph in our results
-                                        let mut found = false;
-                                        for glyph in glyphs.iter_mut() {
-                                            if glyph.start == pos {
-                                                *glyph = fb_glyph.clone();
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if !found {
-                                            glyphs.push(fb_glyph.clone());
-                                        }
-                                        break;
-                                    }
+    for (font_id, positions) in font_id_to_positions {
+        if let Some(font) = font_system.get_font(font_id) {
+            // Shape the entire run with this font
+            let mut fb_glyphs = Vec::new();
+            
+            // Use a temporary buffer to shape with the fallback font
+            let mut buffer = ShapeBuffer::default();
+            let fb_missing = shape_fallback(
+                &mut buffer,
+                &mut fb_glyphs,
+                &font,
+                line,
+                attrs_list,
+                start_run,
+                end_run,
+                span_rtl,
+            );
+            
+            // Process positions that should be covered by this font
+            for &pos in &positions {
+                if !fb_missing.contains(&pos) {
+                    // Find the corresponding glyph in fb_glyphs
+                    for fb_glyph in &fb_glyphs {
+                        if fb_glyph.start == pos {
+                            // Add or replace the glyph in our results
+                            let mut found = false;
+                            for glyph in glyphs.iter_mut() {
+                                if glyph.start == pos {
+                                    *glyph = fb_glyph.clone();
+                                    found = true;
+                                    break;
                                 }
-                            } else {
-                                // This position wasn't covered by the font after all
-                                remaining_missing.push(pos);
                             }
+                            if !found {
+                                glyphs.push(fb_glyph.clone());
+                            }
+                            break;
                         }
-                        
-                        found_font = true;
-                        break; // We found a font for this family
                     }
+                } else {
+                    // This position wasn't covered by the font after all
+                    remaining_missing.push(pos);
                 }
             }
-        }
-        
-        // If we didn't find a font for this family, add all positions back to missing
-        if !found_font {
-            remaining_missing.extend_from_slice(&positions);
+        } else {
+            // Font not found, keep positions in missing list
+            remaining_missing.extend(positions);
         }
     }
     
-    remaining_missing.sort(); // Sort for consistency
+    // Sort for consistency 
+    remaining_missing.sort();
+    
     remaining_missing
 }
 

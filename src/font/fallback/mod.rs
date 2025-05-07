@@ -478,8 +478,8 @@ pub struct UnicodeRangeFallback {
     pub start: char,
     /// The Unicode range end (inclusive)
     pub end: char,
-    /// The font family to use for this range
-    pub font_family: String,
+    /// The font ID to use for this range
+    pub font_id: fontdb::ID,
 }
 
 /// Container for Unicode range fallbacks with efficient lookup
@@ -489,7 +489,7 @@ pub struct UnicodeRangeFallbacks {
     ranges: Vec<UnicodeRangeFallback>,
     sorted: bool,
     // Cache for character lookups
-    lookup_cache: HashMap<char, Option<String>>,
+    lookup_cache: HashMap<char, Option<fontdb::ID>>,
 }
 
 impl UnicodeRangeFallbacks {
@@ -501,20 +501,20 @@ impl UnicodeRangeFallbacks {
         }
     }
     
-    pub fn add(&mut self, start: char, end: char, font_family: &str) {
+    pub fn add(&mut self, start: char, end: char, font_id: fontdb::ID) {
         self.ranges.push(UnicodeRangeFallback {
             start,
             end,
-            font_family: font_family.to_owned(),
+            font_id,
         });
         self.sorted = false;
         self.lookup_cache.clear(); // Invalidate cache when adding new ranges
     }
     
-    pub fn find_for_char(&mut self, c: char) -> Option<String> {
+    pub fn find_for_char(&mut self, c: char) -> Option<fontdb::ID> {
         // Check cache first
         if let Some(cached) = self.lookup_cache.get(&c) {
-            return cached.clone();
+            return *cached;
         }
         
         // Not in cache, do the lookup
@@ -526,10 +526,10 @@ impl UnicodeRangeFallbacks {
         
         let result = self.ranges.iter()
             .find(|range| c >= range.start && c <= range.end)
-            .map(|range| range.font_family.clone());
+            .map(|range| range.font_id);
         
         // Cache the result
-        self.lookup_cache.insert(c, result.clone());
+        self.lookup_cache.insert(c, result);
         
         result
     }
