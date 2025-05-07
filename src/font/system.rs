@@ -394,42 +394,6 @@ impl FontSystem {
         self.unicode_range_fallbacks.add(start, end, font_id);
     }
     
-    /// Add a fallback for a single Unicode character
-    pub fn add_unicode_char_fallback(&mut self, c: char, font_id: fontdb::ID) {
-        self.unicode_range_fallbacks.add(c, c, font_id);
-    }
-    
-    /// Add a fallback for a named Unicode block
-    pub fn add_unicode_block_fallback(&mut self, block_name: &str, font_id: fontdb::ID) -> Result<(), &'static str> {
-        match block_name {
-            "Basic Latin" => self.add_unicode_range_fallback('\u{0000}', '\u{007F}', font_id),
-            "Latin-1 Supplement" => self.add_unicode_range_fallback('\u{0080}', '\u{00FF}', font_id),
-            "Latin Extended-A" => self.add_unicode_range_fallback('\u{0100}', '\u{017F}', font_id),
-            "Latin Extended-B" => self.add_unicode_range_fallback('\u{0180}', '\u{024F}', font_id),
-            "Greek and Coptic" => self.add_unicode_range_fallback('\u{0370}', '\u{03FF}', font_id),
-            "Cyrillic" => self.add_unicode_range_fallback('\u{0400}', '\u{04FF}', font_id),
-            "Cyrillic Supplement" => self.add_unicode_range_fallback('\u{0500}', '\u{052F}', font_id),
-            "Arabic" => self.add_unicode_range_fallback('\u{0600}', '\u{06FF}', font_id),
-            "Devanagari" => self.add_unicode_range_fallback('\u{0900}', '\u{097F}', font_id),
-            "Bengali" => self.add_unicode_range_fallback('\u{0980}', '\u{09FF}', font_id),
-            "CJK Unified Ideographs" => self.add_unicode_range_fallback('\u{4E00}', '\u{9FFF}', font_id),
-            "Emoji" => {
-                // Handle multiple emoji ranges
-                self.add_unicode_range_fallback('\u{1F300}', '\u{1F6FF}', font_id);
-                self.add_unicode_range_fallback('\u{1F900}', '\u{1F9FF}', font_id);
-                self.add_unicode_range_fallback('\u{1FA70}', '\u{1FAFF}', font_id);
-            }
-            // Add more blocks as needed
-            _ => return Err("Unknown Unicode block name"),
-        }
-        Ok(())
-    }
-    
-    /// Clear all Unicode range fallbacks
-    pub fn clear_unicode_range_fallbacks(&mut self) {
-        self.unicode_range_fallbacks.clear();
-    }
-    
     /// Get the fallback font ID for a specific character
     pub fn get_unicode_range_fallback_for_char(&mut self, c: char) -> Option<fontdb::ID> {
         self.unicode_range_fallbacks.find_for_char(c)
