@@ -435,7 +435,6 @@ fn shape_run_cached(
     // Fill in cache if not already set
     let mut cache_glyphs = Vec::new();
     
-    // Use our modified shape_run function (with Unicode range fallbacks)
     shape_run(
         &mut cache_glyphs,
         font_system,
@@ -445,7 +444,6 @@ fn shape_run_cached(
         end_run,
         span_rtl,
     );
-    
     glyphs.extend_from_slice(&cache_glyphs);
     for glyph in cache_glyphs.iter_mut() {
         // Adjust glyph start and end to remove run position
