@@ -11,12 +11,11 @@ use core::ops::Range;
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 use std::collections::HashMap;
+use std::sync::Arc;
+use fontdb::Family;
 
 use crate::fallback::FontFallbackIter;
-use crate::{
-    math, Align, AttrsList, CacheKeyFlags, Color, Font, FontSystem, LayoutGlyph, LayoutLine,
-    Metrics, Wrap,
-};
+use crate::{math, Align, AttrsList, CacheKeyFlags, Color, Font, FontSystem, LayoutGlyph, LayoutLine, Metrics, Wrap, FontMatchKey};
 
 /// The shaping strategy of some text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,6 +105,7 @@ impl fmt::Debug for ShapeBuffer {
 }
 
 /// Shape text with a specific font, returning missing character positions
+/// Returns (missing, shaped)
 pub fn shape_fallback(
     scratch: &mut ShapeBuffer,
     glyphs: &mut Vec<ShapeGlyph>,
@@ -115,7 +115,7 @@ pub fn shape_fallback(
     start_run: usize,
     end_run: usize,
     span_rtl: bool,
-) -> Vec<usize> {
+) -> (Vec<usize>, Vec<usize>) {
     let run = &line[start_run..end_run];
 
     let font_scale = font.rustybuzz().units_per_em() as f32;
@@ -166,6 +166,7 @@ pub fn shape_fallback(
     let glyph_positions = glyph_buffer.glyph_positions();
 
     let mut missing = Vec::new();
+    let mut shaped = Vec::new();
     glyphs.reserve(glyph_infos.len());
     let glyph_start = glyphs.len();
     for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
@@ -173,6 +174,8 @@ pub fn shape_fallback(
 
         if info.glyph_id == 0 {
             missing.push(start_glyph);
+        } else {
+            shaped.push(start_glyph);
         }
 
         let attrs = attrs_list.get_span(start_glyph);
@@ -230,7 +233,36 @@ pub fn shape_fallback(
     // Restore the buffer to save an allocation.
     scratch.rustybuzz_buffer = Some(glyph_buffer.clear());
 
-    missing
+    (missing, shaped)
+}
+
+fn get_font_by_family(
+    font_system: &mut FontSystem,
+    font_match_keys: &[FontMatchKey],
+    default_family: &Family
+) -> Option<Arc<Font>> {
+    // Get the actual family name from the Family enum
+    let family_name = font_system.db().family_name(default_family);
+
+    // Find a font match key that has the right family name and preferred weight
+    let font_match_key = font_match_keys
+        .iter()
+        .filter(|m_key| m_key.font_weight_diff == 0)
+        .find(|m_key| {
+            // Check if this font face contains our family name
+            if let Some(face) = font_system.db().face(m_key.id) {
+                face.families.iter().any(|(name, _)| name == family_name)
+            } else {
+                false
+            }
+        });
+
+    // Get the font if we found a match
+    if let Some(m_key) = font_match_key {
+        font_system.get_font(m_key.id)
+    } else {
+        None
+    }
 }
 
 fn shape_run(
@@ -265,26 +297,67 @@ fn shape_run(
     let fonts = font_system.get_font_matches(&attrs);
     let default_families = [&attrs.family];
 
+    // TODO: Okay we need to change this so it tries to find default families with the attrs
+    // first, then goes to
+    // Okay so the reason it does shape it with a font in the first place is because it needs
+    // to get the missing array with are glyph ids unfortunately.
+
+    // OKAY 
+    // OKAY this is going to be really bad, but just at the start
+    // We shape with the default font if that exists.
+    // If it does not exist we create the fallback font iterator, shape with the first thing from that
+    // and then just use that to gather the missing array
+    // We can fix this later.
+
     // Step 1: Process with the default font
     let (glyph_start, mut missing) = {
-        let mut font_iter = FontFallbackIter::new(
-            font_system,
-            &fonts,
-            &default_families,
-            &scripts,
-            &line[start_run..end_run],
-        );
-
-        let font = font_iter.next().expect("no default font found");
+        let font = get_font_by_family(font_system, &fonts, &attrs.family);
         let glyph_start = glyphs.len();
         
-        let scratch = font_iter.shape_caches();
-        let missing = shape_fallback(
-            scratch, glyphs, &font, line, attrs_list, start_run, end_run, span_rtl,
-        );
-        
-        (glyph_start, missing)
+        if let Some(font) = font {
+            let scratch = &mut font_system.shape_buffer;
+            let (missing, _) = shape_fallback(
+                scratch, glyphs, &font, line, attrs_list, start_run, end_run, span_rtl,
+            );
+            (glyph_start, missing)
+        } else {
+            let mut font_iter = FontFallbackIter::new(
+                font_system,
+                &fonts,
+                &default_families,
+                &scripts,
+                &line[start_run..end_run],
+            );
+
+            let font = font_iter.next().expect("no font found");
+            let scratch = font_iter.shape_caches();
+            let mut fb_glyphs = Vec::new();
+            // TODO: I don't know if passing in 
+            let (missing, shaped) = shape_fallback(
+                scratch,
+                &mut fb_glyphs,
+                &font,
+                line,
+                attrs_list,
+                start_run,
+                end_run,
+                span_rtl,
+            );
+
+            // Combine missing and shaped into a single sorted vector
+            let mut combined = Vec::with_capacity(missing.len() + shaped.len());
+            combined.extend_from_slice(&missing);
+            combined.extend_from_slice(&shaped);
+            combined.sort_unstable();
+            
+            (glyph_start, combined)
+        }
+
+       
     }; // font_iter goes out of scope here, releasing the borrow
+
+    // So missing is offsets for graphemes clusters into the original string
+    // Or we didnt' shape it.
 
     // Step 2: Apply Unicode range fallbacks if needed
     if !missing.is_empty() {
@@ -293,6 +366,7 @@ fn shape_run(
         );
     }
 
+    // The question is, do we need a missing here?
     // Step 3: Continue with standard fallbacks if there are still missing glyphs
     if !missing.is_empty() {
         let mut font_iter = FontFallbackIter::new(
@@ -304,6 +378,7 @@ fn shape_run(
         );
 
         // Skip the first font as we've already processed it
+        // TODO: May not work, just remove the default family on font_iter entirely.
         let _ = font_iter.next();
 
         while !missing.is_empty() {
@@ -319,7 +394,7 @@ fn shape_run(
             
             let mut fb_glyphs = Vec::new();
             let scratch = font_iter.shape_caches();
-            let fb_missing = shape_fallback(
+            let (fb_missing, _) = shape_fallback(
                 scratch,
                 &mut fb_glyphs,
                 &font,
