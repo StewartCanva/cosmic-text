@@ -394,9 +394,31 @@ impl FontSystem {
         self.unicode_range_fallbacks.add(start, end, font_id);
     }
     
+    /// Add a Unicode range fallback with specific weight and style
+    pub fn add_unicode_range_fallback_with_style(
+        &mut self, 
+        start: char, 
+        end: char, 
+        font_id: fontdb::ID,
+        weight: Option<fontdb::Weight>,
+        style: Option<fontdb::Style>
+    ) {
+        self.unicode_range_fallbacks.add_with_style(start, end, font_id, weight, style);
+    }
+    
     /// Get the fallback font ID for a specific character
     pub fn get_unicode_range_fallback_for_char(&mut self, c: char) -> Option<fontdb::ID> {
         self.unicode_range_fallbacks.find_for_char(c)
+    }
+    
+    /// Get the fallback font ID for a specific character with weight and style matching
+    pub fn get_unicode_range_fallback_for_char_with_style(
+        &mut self, 
+        c: char,
+        weight: Option<fontdb::Weight>,
+        style: Option<fontdb::Style>
+    ) -> Option<fontdb::ID> {
+        self.unicode_range_fallbacks.find_for_char_with_style(c, weight, style)
     }
     
     /// Check if any Unicode range fallbacks are defined
@@ -415,8 +437,15 @@ impl FontSystem {
         span_rtl: bool,
         missing: &[usize],
     ) -> Vec<usize> {
+        // Okay this makes it really complicated now.
+        // In the case that we haven't shaped anything
+        // we need to find one fo the 
+        // Actually before I ruin this. Can I 
+
+
+        
         // If no Unicode range fallbacks are defined, return quickly
-        if !self.has_unicode_range_fallbacks() || missing.is_empty() {
+        if !self.has_unicode_range_fallbacks() {
             return missing.to_vec();
         }
         
@@ -427,6 +456,12 @@ impl FontSystem {
         let mut font_id_to_positions: HashMap<fontdb::ID, Vec<usize>> = HashMap::default();
         let mut positions_without_fallback: Vec<usize> = Vec::new();
         
+        // TODO: It's possible that missing is empty here 
+        // Actually, missing are indices into grapheme clusters, does this even work?
+        // Okay what actual information do we get from harfbuzz. Can we map the grapheme cluster
+        // to the start of the character?
+        // From harfbuzz. An index to the start of the grapheme cluster in the original string.
+        // Thaat's not too bad.
         for &pos in missing {
             // Find the character at this position
             let char_offset = pos.saturating_sub(start_run);
@@ -443,9 +478,19 @@ impl FontSystem {
                 }
             };
             
-            if let Some(font_id) = self.get_unicode_range_fallback_for_char(c) {
+            // Try to find a fallback font that matches the character, weight, and style
+            if let Some(font_id) = self.get_unicode_range_fallback_for_char_with_style(
+                c, 
+                Some(attrs.weight), 
+                Some(attrs.style)
+            ) {
                 font_id_to_positions.entry(font_id).or_default().push(pos);
-            } else {
+            } 
+            // If no match with specific weight and style, try just the character
+            else if let Some(font_id) = self.get_unicode_range_fallback_for_char(c) {
+                font_id_to_positions.entry(font_id).or_default().push(pos);
+            } 
+            else {
                 positions_without_fallback.push(pos);
             }
         }
@@ -460,7 +505,7 @@ impl FontSystem {
                 
                 // Use a temporary buffer to shape with the fallback font
                 let mut buffer = crate::ShapeBuffer::default();
-                let fb_missing = crate::shape_fallback(
+                let (fb_missing, _) = crate::shape_fallback(
                     &mut buffer,
                     &mut fb_glyphs,
                     &font,

@@ -480,6 +480,10 @@ pub struct UnicodeRangeFallback {
     pub end: char,
     /// The font ID to use for this range
     pub font_id: fontdb::ID,
+    /// The font weight to match (None means match any weight)
+    pub weight: Option<fontdb::Weight>,
+    /// The font style to match (None means match any style)
+    pub style: Option<fontdb::Style>,
 }
 
 /// Container for Unicode range fallbacks with efficient lookup
@@ -489,7 +493,7 @@ pub struct UnicodeRangeFallbacks {
     ranges: Vec<UnicodeRangeFallback>,
     sorted: bool,
     // Cache for character lookups
-    lookup_cache: HashMap<char, Option<fontdb::ID>>,
+    lookup_cache: HashMap<(char, Option<fontdb::Weight>, Option<fontdb::Style>), Option<fontdb::ID>>,
 }
 
 impl UnicodeRangeFallbacks {
@@ -506,14 +510,36 @@ impl UnicodeRangeFallbacks {
             start,
             end,
             font_id,
+            weight: None,
+            style: None,
+        });
+        self.sorted = false;
+        self.lookup_cache.clear(); // Invalidate cache when adding new ranges
+    }
+    
+    pub fn add_with_style(&mut self, start: char, end: char, font_id: fontdb::ID, 
+                         weight: Option<fontdb::Weight>, style: Option<fontdb::Style>) {
+        self.ranges.push(UnicodeRangeFallback {
+            start,
+            end,
+            font_id,
+            weight,
+            style,
         });
         self.sorted = false;
         self.lookup_cache.clear(); // Invalidate cache when adding new ranges
     }
     
     pub fn find_for_char(&mut self, c: char) -> Option<fontdb::ID> {
+        self.find_for_char_with_style(c, None, None)
+    }
+    
+    pub fn find_for_char_with_style(&mut self, c: char, 
+                                   weight: Option<fontdb::Weight>, 
+                                   style: Option<fontdb::Style>) -> Option<fontdb::ID> {
         // Check cache first
-        if let Some(cached) = self.lookup_cache.get(&c) {
+        let cache_key = (c, weight, style);
+        if let Some(cached) = self.lookup_cache.get(&cache_key) {
             return *cached;
         }
         
@@ -525,11 +551,39 @@ impl UnicodeRangeFallbacks {
         }
         
         let result = self.ranges.iter()
-            .find(|range| c >= range.start && c <= range.end)
+            .find(|range| {
+                // First check char range match
+                let char_matches = c >= range.start && c <= range.end;
+                if !char_matches {
+                    return false;
+                }
+                
+                // Then check weight match if specified
+                let weight_matches = match (weight, range.weight) {
+                    // No weight specified in query or range definition = match
+                    (None, _) => true,
+                    // Range doesn't specify weight = match
+                    (_, None) => true,
+                    // Both specified, must match exactly
+                    (Some(w1), Some(w2)) => w1 == w2,
+                };
+                
+                // Finally check style match if specified
+                let style_matches = match (style, range.style) {
+                    // No style specified in query or range definition = match
+                    (None, _) => true,
+                    // Range doesn't specify style = match
+                    (_, None) => true,
+                    // Both specified, must match exactly
+                    (Some(s1), Some(s2)) => s1 == s2,
+                };
+                
+                char_matches && weight_matches && style_matches
+            })
             .map(|range| range.font_id);
         
         // Cache the result
-        self.lookup_cache.insert(c, result);
+        self.lookup_cache.insert(cache_key, result);
         
         result
     }
