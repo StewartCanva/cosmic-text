@@ -463,6 +463,9 @@ fn shape_run(
         font_iter.check_missing(&line[start_run..end_run]);
     }
 
+    // I'm unsure how cosmic text has worked without this beforehand.
+    glyphs.sort_by_key(|g| g.start);
+
     // Restore the scripts buffer.
     font_system.shape_buffer.scripts = scripts;
 }
