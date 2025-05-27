@@ -477,6 +477,8 @@ impl FontSystem {
                     continue;
                 }
             };
+
+            print!("COSMIC TEXT: {:?}, {:?}", attrs.weight, attrs.style);
             
             // Try to find a fallback font that matches the character, weight, and style
             if let Some(font_id) = self.get_unicode_range_fallback_for_char_with_style(
@@ -487,9 +489,10 @@ impl FontSystem {
                 font_id_to_positions.entry(font_id).or_default().push(pos);
             } 
             // If no match with specific weight and style, try just the character
-            else if let Some(font_id) = self.get_unicode_range_fallback_for_char(c) {
+            // Actually this will prevent us from using the correct fallback, when text changes weight after first shape.
+            /*else if let Some(font_id) = self.get_unicode_range_fallback_for_char(c) {
                 font_id_to_positions.entry(font_id).or_default().push(pos);
-            } 
+            } */
             else {
                 positions_without_fallback.push(pos);
             }
