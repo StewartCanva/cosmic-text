@@ -120,7 +120,7 @@ pub struct FontSystem {
 
     /// List of fallbacks
     pub(crate) fallbacks: Fallbacks,
-    
+
     /// Unicode range-specific fallbacks
     pub(crate) unicode_range_fallbacks: UnicodeRangeFallbacks,
 }
@@ -165,10 +165,10 @@ impl FontSystem {
     }
 
     /// Create a new [`FontSystem`] with a pre-specified locale, font database and font fallback list.
-    pub fn new_with_locale_and_db_and_fallback<F: Fallback + 'static>(
+    pub fn new_with_locale_and_db_and_fallback(
         locale: String,
         db: fontdb::Database,
-        impl_fallback: F,
+        impl_fallback: impl Fallback + 'static,
     ) -> Self {
         let mut monospace_font_ids = db
             .faces()

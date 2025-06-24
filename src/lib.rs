@@ -148,6 +148,9 @@ type BuildHasher = core::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasher>;
 #[cfg(not(feature = "std"))]
 type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
+<<<<<<< HEAD
 
 // Export shape_fallback for use in FontSystem
 pub use shape::shape_fallback;
+=======
+>>>>>>> taj-p/tajp/main/noLfs

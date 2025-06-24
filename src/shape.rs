@@ -263,6 +263,7 @@ fn get_font_by_family(
     } else {
         None
     }
+    missing
 }
 
 fn shape_run(
@@ -369,6 +370,7 @@ fn shape_run(
     // I'm unsure how cosmic text has worked without this beforehand.
     glyphs.sort_by_key(|g| g.start);
 
+
     // Restore the scripts buffer.
     font_system.shape_buffer.scripts = scripts;
 }
@@ -415,7 +417,6 @@ fn shape_run_cached(
 
     // Fill in cache if not already set
     let mut cache_glyphs = Vec::new();
-    
     shape_run(
         &mut cache_glyphs,
         font_system,
@@ -1559,12 +1560,14 @@ impl ShapeLine {
                                 _ => font_size,
                             };
 
-                            let x_advance = glyph_font_size * glyph.x_advance
+                            let mut x_advance = glyph_font_size * glyph.x_advance
                                 + if word.blank {
                                     justification_expansion
                                 } else {
                                     0.0
                                 };
+                            x_advance = math::roundf(x_advance);
+
                             if self.rtl {
                                 x -= x_advance;
                             }
