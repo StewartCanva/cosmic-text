@@ -463,8 +463,6 @@ impl FontSystem {
                     continue;
                 }
             };
-
-            print!("COSMIC TEXT: {:?}, {:?}", attrs.weight, attrs.style);
             
             // Try to find a fallback font that matches the character, weight, and style
             if let Some(font_id) = self.get_unicode_range_fallback_for_char_with_style(
@@ -473,13 +471,7 @@ impl FontSystem {
                 Some(attrs.style)
             ) {
                 font_id_to_positions.entry(font_id).or_default().push(pos);
-            } 
-            // If no match with specific weight and style, try just the character
-            // Actually this will prevent us from using the correct fallback, when text changes weight after first shape.
-            /*else if let Some(font_id) = self.get_unicode_range_fallback_for_char(c) {
-                font_id_to_positions.entry(font_id).or_default().push(pos);
-            } */
-            else {
+            } else {
                 positions_without_fallback.push(pos);
             }
         }
@@ -488,52 +480,54 @@ impl FontSystem {
         let mut remaining_missing = positions_without_fallback;
         
         for (font_id, positions) in font_id_to_positions {
-            if let Some(font) = self.get_font(font_id) {
-                // Shape the entire run with this font
-                let mut fb_glyphs = Vec::new();
+            let Some(font) = self.get_font(font_id) else {
+                // Font not found, keep positions in missing list
+                remaining_missing.extend(positions);
+                continue;
+            };
+            
+            // Shape the entire run with this font
+            let mut fb_glyphs = Vec::new();
+            
+            // Use a temporary buffer to shape with the fallback font
+            let mut buffer = crate::ShapeBuffer::default();
+            let (fb_missing, _) = crate::shape_fallback(
+                &mut buffer,
+                &mut fb_glyphs,
+                &font,
+                line,
+                attrs_list,
+                start_run,
+                end_run,
+                span_rtl,
+            );
+            
+            // Process positions that should be covered by this font
+            for pos in positions {
+                if fb_missing.contains(&pos) {
+                    // This position wasn't covered by the font after all
+                    remaining_missing.push(pos);
+                    continue;
+                }
                 
-                // Use a temporary buffer to shape with the fallback font
-                let mut buffer = crate::ShapeBuffer::default();
-                let (fb_missing, _) = crate::shape_fallback(
-                    &mut buffer,
-                    &mut fb_glyphs,
-                    &font,
-                    line,
-                    attrs_list,
-                    start_run,
-                    end_run,
-                    span_rtl,
-                );
-                
-                // Process positions that should be covered by this font
-                for pos in positions {
-                    if !fb_missing.contains(&pos) {
-                        // Find the corresponding glyph in fb_glyphs
-                        for fb_glyph in &fb_glyphs {
-                            if fb_glyph.start == pos {
-                                // Add or replace the glyph in our results
-                                let mut found = false;
-                                for glyph in glyphs.iter_mut() {
-                                    if glyph.start == pos {
-                                        *glyph = fb_glyph.clone();
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if !found {
-                                    glyphs.push(fb_glyph.clone());
-                                }
+                // Find the corresponding glyph in fb_glyphs
+                for fb_glyph in &fb_glyphs {
+                    if fb_glyph.start == pos {
+                        // Add or replace the glyph in our results
+                        let mut found = false;
+                        for glyph in glyphs.iter_mut() {
+                            if glyph.start == pos {
+                                *glyph = fb_glyph.clone();
+                                found = true;
                                 break;
                             }
                         }
-                    } else {
-                        // This position wasn't covered by the font after all
-                        remaining_missing.push(pos);
+                        if !found {
+                            glyphs.push(fb_glyph.clone());
+                        }
+                        break;
                     }
                 }
-            } else {
-                // Font not found, keep positions in missing list
-                remaining_missing.extend(positions);
             }
         }
         

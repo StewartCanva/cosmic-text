@@ -332,7 +332,6 @@ fn shape_run(
             let font = font_iter.next().expect("no font found");
             let scratch = font_iter.shape_caches();
             let mut fb_glyphs = Vec::new();
-            // TODO: I don't know if passing in 
             let (missing, shaped) = shape_fallback(
                 scratch,
                 &mut fb_glyphs,
@@ -352,8 +351,6 @@ fn shape_run(
             
             (glyph_start, combined)
         }
-
-       
     }; // font_iter goes out of scope here, releasing the borrow
 
     // So missing is offsets for graphemes clusters into the original string
