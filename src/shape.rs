@@ -263,7 +263,6 @@ fn get_font_by_family(
     } else {
         None
     }
-    missing
 }
 
 fn shape_run(

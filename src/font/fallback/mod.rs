@@ -470,7 +470,6 @@ impl Iterator for FontFallbackIter<'_> {
         item
     }
 }
-<<<<<<< HEAD
 
 /// Represents a Unicode range and its associated fallback font family
 #[derive(Clone, Debug)]
@@ -599,5 +598,3 @@ impl UnicodeRangeFallbacks {
         self.sorted = true;
     }
 }
-=======
->>>>>>> taj-p/tajp/main/noLfs
