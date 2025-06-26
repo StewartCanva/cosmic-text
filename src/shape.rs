@@ -297,19 +297,9 @@ fn shape_run(
     let fonts = font_system.get_font_matches(&attrs);
     let default_families = [&attrs.family];
 
-    // TODO: Okay we need to change this so it tries to find default families with the attrs
-    // first, then goes to
-    // Okay so the reason it does shape it with a font in the first place is because it needs
-    // to get the missing array with are glyph ids unfortunately.
-
-    // OKAY 
-    // OKAY this is going to be really bad, but just at the start
-    // We shape with the default font if that exists.
-    // If it does not exist we create the fallback font iterator, shape with the first thing from that
-    // and then just use that to gather the missing array
-    // We can fix this later.
-
-    // Step 1: Process with the default font
+    // Step 1: Initial shaping with default or fallback font
+    // We need to shape with some font first to determine which characters are missing,
+    // then apply Unicode range fallbacks for any unsupported characters.
     let (glyph_start, mut missing) = {
         let font = get_font_by_family(font_system, &fonts, &attrs.family);
         let glyph_start = glyphs.len();
@@ -353,9 +343,6 @@ fn shape_run(
         }
     }; // font_iter goes out of scope here, releasing the borrow
 
-    // So missing is offsets for graphemes clusters into the original string
-    // Or we didnt' shape it.
-
     // Step 2: Apply Unicode range fallbacks if needed
     if !missing.is_empty() {
         missing = font_system.process_unicode_range_fallbacks(
@@ -363,9 +350,8 @@ fn shape_run(
         );
     }
     
-    // I'm unsure how cosmic text has worked without this beforehand.
+    // Ensure glyphs are sorted by position
     glyphs.sort_by_key(|g| g.start);
-
 
     // Restore the scripts buffer.
     font_system.shape_buffer.scripts = scripts;
