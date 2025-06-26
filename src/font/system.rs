@@ -437,14 +437,6 @@ impl FontSystem {
         span_rtl: bool,
         missing: &[usize],
     ) -> Vec<usize> {
-        // Okay this makes it really complicated now.
-        // In the case that we haven't shaped anything
-        // we need to find one fo the 
-        // Actually before I ruin this. Can I 
-
-
-        
-        // If no Unicode range fallbacks are defined, return quickly
         if !self.has_unicode_range_fallbacks() {
             return missing.to_vec();
         }
@@ -456,12 +448,6 @@ impl FontSystem {
         let mut font_id_to_positions: HashMap<fontdb::ID, Vec<usize>> = HashMap::default();
         let mut positions_without_fallback: Vec<usize> = Vec::new();
         
-        // TODO: It's possible that missing is empty here 
-        // Actually, missing are indices into grapheme clusters, does this even work?
-        // Okay what actual information do we get from harfbuzz. Can we map the grapheme cluster
-        // to the start of the character?
-        // From harfbuzz. An index to the start of the grapheme cluster in the original string.
-        // Thaat's not too bad.
         for &pos in missing {
             // Find the character at this position
             let char_offset = pos.saturating_sub(start_run);
