@@ -537,14 +537,11 @@ impl UnicodeRangeFallbacks {
     pub fn find_for_char_with_style(&mut self, c: char, 
                                    weight: Option<fontdb::Weight>, 
                                    style: Option<fontdb::Style>) -> Option<fontdb::ID> {
-        // Check cache first
         let cache_key = (c, weight, style);
         if let Some(cached) = self.lookup_cache.get(&cache_key) {
             return *cached;
         }
         
-        // Not in cache, do the lookup
-        // Ensure ranges are sorted
         if !self.sorted {
             self.ranges.sort_by_key(|range| range.start as u32);
             self.sorted = true;
@@ -552,29 +549,20 @@ impl UnicodeRangeFallbacks {
         
         let result = self.ranges.iter()
             .find(|range| {
-                // First check char range match
                 let char_matches = c >= range.start && c <= range.end;
                 if !char_matches {
                     return false;
                 }
                 
-                // Then check weight match if specified
                 let weight_matches = match (weight, range.weight) {
-                    // No weight specified in query or range definition = match
                     (None, _) => true,
-                    // Range doesn't specify weight = match
                     (_, None) => true,
-                    // Both specified, must match exactly
                     (Some(w1), Some(w2)) => w1 == w2,
                 };
                 
-                // Finally check style match if specified
                 let style_matches = match (style, range.style) {
-                    // No style specified in query or range definition = match
                     (None, _) => true,
-                    // Range doesn't specify style = match
                     (_, None) => true,
-                    // Both specified, must match exactly
                     (Some(s1), Some(s2)) => s1 == s2,
                 };
                 
@@ -592,9 +580,4 @@ impl UnicodeRangeFallbacks {
         self.ranges.is_empty()
     }
     
-    pub fn clear(&mut self) {
-        self.ranges.clear();
-        self.lookup_cache.clear();
-        self.sorted = true;
-    }
 }

@@ -104,7 +104,6 @@ impl fmt::Debug for ShapeBuffer {
     }
 }
 
-/// Shape text with a specific font, returning missing character positions
 /// Returns (missing, shaped)
 pub fn shape_fallback(
     scratch: &mut ShapeBuffer,
@@ -257,7 +256,6 @@ fn get_font_by_family(
             }
         });
 
-    // Get the font if we found a match
     if let Some(m_key) = font_match_key {
         font_system.get_font(m_key.id)
     } else {
@@ -341,7 +339,7 @@ fn shape_run(
             
             (glyph_start, combined)
         }
-    }; // font_iter goes out of scope here, releasing the borrow
+    };
 
     // Step 2: Apply Unicode range fallbacks if needed
     if !missing.is_empty() {
