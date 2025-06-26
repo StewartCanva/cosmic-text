@@ -4,6 +4,7 @@ use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use fontdb::Family;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
 
@@ -11,7 +12,7 @@ use core::ops::{Deref, DerefMut};
 pub use fontdb;
 pub use rustybuzz;
 
-use super::fallback::{Fallback, Fallbacks, MonospaceFallbackInfo, PlatformFallback};
+use super::fallback::{Fallback, Fallbacks, MonospaceFallbackInfo, PlatformFallback, UnicodeRangeFallbacks};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FontMatchKey {
@@ -119,6 +120,9 @@ pub struct FontSystem {
 
     /// List of fallbacks
     pub(crate) fallbacks: Fallbacks,
+
+    /// Unicode range-specific fallbacks
+    pub(crate) unicode_range_fallbacks: UnicodeRangeFallbacks,
 }
 
 impl fmt::Debug for FontSystem {
@@ -161,10 +165,10 @@ impl FontSystem {
     }
 
     /// Create a new [`FontSystem`] with a pre-specified locale, font database and font fallback list.
-    pub fn new_with_locale_and_db_and_fallback(
+    pub fn new_with_locale_and_db_and_fallback<F: Fallback + 'static>(
         locale: String,
         db: fontdb::Database,
-        impl_fallback: impl Fallback + 'static,
+        impl_fallback: F,
     ) -> Self {
         let mut monospace_font_ids = db
             .faces()
@@ -219,6 +223,7 @@ impl FontSystem {
             shape_buffer: ShapeBuffer::default(),
             dyn_fallback: Box::new(impl_fallback),
             fallbacks,
+            unicode_range_fallbacks: UnicodeRangeFallbacks::new(),
         }
     }
 
@@ -382,6 +387,161 @@ impl FontSystem {
         for source in fonts {
             db.load_font_source(source);
         }
+    }
+
+    /// Add a Unicode range fallback
+    pub fn add_unicode_range_fallback(&mut self, start: char, end: char, font_id: fontdb::ID) {
+        self.unicode_range_fallbacks.add(start, end, font_id);
+    }
+    
+    /// Add a Unicode range fallback with specific weight and style
+    pub fn add_unicode_range_fallback_with_style(
+        &mut self, 
+        start: char, 
+        end: char, 
+        font_id: fontdb::ID,
+        weight: Option<fontdb::Weight>,
+        style: Option<fontdb::Style>
+    ) {
+        self.unicode_range_fallbacks.add_with_style(start, end, font_id, weight, style);
+    }
+    
+    /// Get the fallback font ID for a specific character
+    pub fn get_unicode_range_fallback_for_char(&mut self, c: char) -> Option<fontdb::ID> {
+        self.unicode_range_fallbacks.find_for_char(c)
+    }
+    
+    /// Get the fallback font ID for a specific character with weight and style matching
+    pub fn get_unicode_range_fallback_for_char_with_style(
+        &mut self, 
+        c: char,
+        weight: Option<fontdb::Weight>,
+        style: Option<fontdb::Style>
+    ) -> Option<fontdb::ID> {
+        self.unicode_range_fallbacks.find_for_char_with_style(c, weight, style)
+    }
+    
+    /// Check if any Unicode range fallbacks are defined
+    pub fn has_unicode_range_fallbacks(&self) -> bool {
+        !self.unicode_range_fallbacks.is_empty()
+    }
+    
+    /// Process Unicode range fallbacks for missing character positions
+    pub fn process_unicode_range_fallbacks(
+        &mut self,
+        glyphs: &mut Vec<crate::ShapeGlyph>,
+        line: &str,
+        attrs_list: &crate::AttrsList,
+        start_run: usize,
+        end_run: usize,
+        span_rtl: bool,
+        missing: &[usize],
+    ) -> Vec<usize> {
+        if !self.has_unicode_range_fallbacks() {
+            return missing.to_vec();
+        }
+        
+        // Get attributes for matching fonts
+        let attrs = attrs_list.get_span(start_run);
+        
+        // Group missing positions by fallback font ID
+        let mut font_id_to_positions: HashMap<fontdb::ID, Vec<usize>> = HashMap::default();
+        let mut positions_without_fallback: Vec<usize> = Vec::new();
+        
+        for &pos in missing {
+            // Find the character at this position
+            let char_offset = pos.saturating_sub(start_run);
+            if char_offset >= line[start_run..end_run].len() {
+                positions_without_fallback.push(pos);
+                continue;
+            }
+            
+            let c = match line[start_run..end_run][char_offset..].chars().next() {
+                Some(c) => c,
+                None => {
+                    positions_without_fallback.push(pos);
+                    continue;
+                }
+            };
+
+            print!("COSMIC TEXT: {:?}, {:?}", attrs.weight, attrs.style);
+            
+            // Try to find a fallback font that matches the character, weight, and style
+            if let Some(font_id) = self.get_unicode_range_fallback_for_char_with_style(
+                c, 
+                Some(attrs.weight), 
+                Some(attrs.style)
+            ) {
+                font_id_to_positions.entry(font_id).or_default().push(pos);
+            } 
+            // If no match with specific weight and style, try just the character
+            // Actually this will prevent us from using the correct fallback, when text changes weight after first shape.
+            /*else if let Some(font_id) = self.get_unicode_range_fallback_for_char(c) {
+                font_id_to_positions.entry(font_id).or_default().push(pos);
+            } */
+            else {
+                positions_without_fallback.push(pos);
+            }
+        }
+        
+        // Process each fallback font ID and its positions
+        let mut remaining_missing = positions_without_fallback;
+        
+        for (font_id, positions) in font_id_to_positions {
+            if let Some(font) = self.get_font(font_id) {
+                // Shape the entire run with this font
+                let mut fb_glyphs = Vec::new();
+                
+                // Use a temporary buffer to shape with the fallback font
+                let mut buffer = crate::ShapeBuffer::default();
+                let (fb_missing, _) = crate::shape_fallback(
+                    &mut buffer,
+                    &mut fb_glyphs,
+                    &font,
+                    line,
+                    attrs_list,
+                    start_run,
+                    end_run,
+                    span_rtl,
+                );
+                
+                // Process positions that should be covered by this font
+                for pos in positions {
+                    if !fb_missing.contains(&pos) {
+                        // Find the corresponding glyph in fb_glyphs
+                        for fb_glyph in &fb_glyphs {
+                            if fb_glyph.start == pos {
+                                // Add or replace the glyph in our results
+                                let mut found = false;
+                                for glyph in glyphs.iter_mut() {
+                                    if glyph.start == pos {
+                                        *glyph = fb_glyph.clone();
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if !found {
+                                    glyphs.push(fb_glyph.clone());
+                                }
+                                break;
+                            }
+                        }
+                    } else {
+                        // This position wasn't covered by the font after all
+                        remaining_missing.push(pos);
+                    }
+                }
+            } else {
+                // Font not found, keep positions in missing list
+                remaining_missing.extend(positions);
+            }
+        }
+        
+        // Sort by character position
+        glyphs.sort_by_key(|g| g.start);
+        remaining_missing.sort();
+        
+        remaining_missing
     }
 }
 

@@ -470,3 +470,131 @@ impl Iterator for FontFallbackIter<'_> {
         item
     }
 }
+
+/// Represents a Unicode range and its associated fallback font family
+#[derive(Clone, Debug)]
+pub struct UnicodeRangeFallback {
+    /// The Unicode range start (inclusive)
+    pub start: char,
+    /// The Unicode range end (inclusive)
+    pub end: char,
+    /// The font ID to use for this range
+    pub font_id: fontdb::ID,
+    /// The font weight to match (None means match any weight)
+    pub weight: Option<fontdb::Weight>,
+    /// The font style to match (None means match any style)
+    pub style: Option<fontdb::Style>,
+}
+
+/// Container for Unicode range fallbacks with efficient lookup
+#[derive(Default, Debug)]
+pub struct UnicodeRangeFallbacks {
+    // Sorted by start code point
+    ranges: Vec<UnicodeRangeFallback>,
+    sorted: bool,
+    // Cache for character lookups
+    lookup_cache: HashMap<(char, Option<fontdb::Weight>, Option<fontdb::Style>), Option<fontdb::ID>>,
+}
+
+impl UnicodeRangeFallbacks {
+    pub fn new() -> Self {
+        Self {
+            ranges: Vec::new(),
+            sorted: true,
+            lookup_cache: HashMap::with_hasher(BuildHasher::default()),
+        }
+    }
+    
+    pub fn add(&mut self, start: char, end: char, font_id: fontdb::ID) {
+        self.ranges.push(UnicodeRangeFallback {
+            start,
+            end,
+            font_id,
+            weight: None,
+            style: None,
+        });
+        self.sorted = false;
+        self.lookup_cache.clear(); // Invalidate cache when adding new ranges
+    }
+    
+    pub fn add_with_style(&mut self, start: char, end: char, font_id: fontdb::ID, 
+                         weight: Option<fontdb::Weight>, style: Option<fontdb::Style>) {
+        self.ranges.push(UnicodeRangeFallback {
+            start,
+            end,
+            font_id,
+            weight,
+            style,
+        });
+        self.sorted = false;
+        self.lookup_cache.clear(); // Invalidate cache when adding new ranges
+    }
+    
+    pub fn find_for_char(&mut self, c: char) -> Option<fontdb::ID> {
+        self.find_for_char_with_style(c, None, None)
+    }
+    
+    pub fn find_for_char_with_style(&mut self, c: char, 
+                                   weight: Option<fontdb::Weight>, 
+                                   style: Option<fontdb::Style>) -> Option<fontdb::ID> {
+        // Check cache first
+        let cache_key = (c, weight, style);
+        if let Some(cached) = self.lookup_cache.get(&cache_key) {
+            return *cached;
+        }
+        
+        // Not in cache, do the lookup
+        // Ensure ranges are sorted
+        if !self.sorted {
+            self.ranges.sort_by_key(|range| range.start as u32);
+            self.sorted = true;
+        }
+        
+        let result = self.ranges.iter()
+            .find(|range| {
+                // First check char range match
+                let char_matches = c >= range.start && c <= range.end;
+                if !char_matches {
+                    return false;
+                }
+                
+                // Then check weight match if specified
+                let weight_matches = match (weight, range.weight) {
+                    // No weight specified in query or range definition = match
+                    (None, _) => true,
+                    // Range doesn't specify weight = match
+                    (_, None) => true,
+                    // Both specified, must match exactly
+                    (Some(w1), Some(w2)) => w1 == w2,
+                };
+                
+                // Finally check style match if specified
+                let style_matches = match (style, range.style) {
+                    // No style specified in query or range definition = match
+                    (None, _) => true,
+                    // Range doesn't specify style = match
+                    (_, None) => true,
+                    // Both specified, must match exactly
+                    (Some(s1), Some(s2)) => s1 == s2,
+                };
+                
+                char_matches && weight_matches && style_matches
+            })
+            .map(|range| range.font_id);
+        
+        // Cache the result
+        self.lookup_cache.insert(cache_key, result);
+        
+        result
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+    
+    pub fn clear(&mut self) {
+        self.ranges.clear();
+        self.lookup_cache.clear();
+        self.sorted = true;
+    }
+}
