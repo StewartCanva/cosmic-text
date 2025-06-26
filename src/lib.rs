@@ -149,5 +149,4 @@ type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasher>;
 #[cfg(not(feature = "std"))]
 type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
 
-// Export shape_fallback for use in FontSystem
 pub use shape::shape_fallback;

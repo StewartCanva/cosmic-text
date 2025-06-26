@@ -240,15 +240,12 @@ fn get_font_by_family(
     font_match_keys: &[FontMatchKey],
     default_family: &Family
 ) -> Option<Arc<Font>> {
-    // Get the actual family name from the Family enum
     let family_name = font_system.db().family_name(default_family);
-
-    // Find a font match key that has the right family name and preferred weight
+    
     let font_match_key = font_match_keys
         .iter()
         .filter(|m_key| m_key.font_weight_diff == 0)
         .find(|m_key| {
-            // Check if this font face contains our family name
             if let Some(face) = font_system.db().face(m_key.id) {
                 face.families.iter().any(|(name, _)| name == family_name)
             } else {
